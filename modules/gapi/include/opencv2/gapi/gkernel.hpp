@@ -2,7 +2,7 @@
 // It is subject to the license terms in the LICENSE file found in the top-level directory
 // of this distribution and at http://opencv.org/license.html.
 //
-// Copyright (C) 2018-2020 Intel Corporation
+// Copyright (C) 2018-2021 Intel Corporation
 
 
 #ifndef OPENCV_GAPI_GKERNEL_HPP
@@ -30,6 +30,7 @@ struct GTypeInfo
 {
     GShape                 shape;
     cv::detail::OpaqueKind kind;
+    detail::HostCtor       ctor;
 };
 
 using GShapes    = std::vector<GShape>;
@@ -89,6 +90,10 @@ namespace detail
     template<typename U> struct Yield<cv::GOpaque<U> >
     {
         static inline cv::GOpaque<U> yield(cv::GCall &call, int i) { return call.yieldOpaque<U>(i); }
+    };
+    template<> struct Yield<GFrame>
+    {
+        static inline cv::GFrame yield(cv::GCall &call, int i) { return call.yieldFrame(i); }
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -239,8 +244,6 @@ public:
     using InArgs  = std::tuple<Args...>;
     using OutArgs = std::tuple<R>;
 
-    static_assert(!cv::detail::contains<GFrame, OutArgs>::value, "Values of GFrame type can't be used as operation outputs");
-
     static R on(Args... args)
     {
         cv::GCall call(GKernel{ K::id()
@@ -369,6 +372,7 @@ namespace gapi
 {
     // Prework: model "Device" API before it gets to G-API headers.
     // FIXME: Don't mix with internal Backends class!
+    /// @private
     class GAPI_EXPORTS GBackend
     {
     public:
@@ -409,6 +413,7 @@ namespace std
 
 namespace cv {
 namespace gapi {
+    /// @private
     class GFunctor
     {
     public:
@@ -515,6 +520,13 @@ namespace gapi {
         const std::vector<GTransform>& get_transformations() const;
 
         /**
+         * @brief Returns vector of kernel ids included in the package
+         *
+         * @return vector of kernel ids included in the package
+         */
+        std::vector<std::string> get_kernel_ids() const;
+
+        /**
          * @brief Test if a particular kernel _implementation_ KImpl is
          * included in this kernel package.
          *
@@ -601,6 +613,18 @@ namespace gapi {
         void include()
         {
             includeHelper<KImpl>();
+        }
+
+        /**
+         * @brief Adds a new kernel based on it's backend and id into the kernel package
+         *
+         * @param backend backend associated with the kernel
+         * @param kernel_id a name/id of the kernel
+         */
+        void include(const cv::gapi::GBackend& backend, const std::string& kernel_id)
+        {
+            removeAPI(kernel_id);
+            m_id_kernels[kernel_id] = std::make_pair(backend, GKernelImpl{{}, {}});
         }
 
         /**

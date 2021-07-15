@@ -10,11 +10,14 @@ import os, os.path, sys, argparse, traceback, multiprocessing
 sys.path.insert(0, os.path.abspath(os.path.abspath(os.path.dirname(__file__))+'/../ios'))
 from build_framework import Builder
 sys.path.insert(0, os.path.abspath(os.path.abspath(os.path.dirname(__file__))+'/../apple'))
-from cv_build_utils import print_error
+from cv_build_utils import print_error, get_cmake_version
 
 MACOSX_DEPLOYMENT_TARGET='10.12'  # default, can be changed via command line options or environment variable
 
 class OSXBuilder(Builder):
+
+    def checkCMakeVersion(self):
+        assert get_cmake_version() >= (3, 17), "CMake 3.17 or later is required. Current version is {}".format(get_cmake_version())
 
     def getObjcTarget(self, target):
         # Obj-C generation target
@@ -55,11 +58,12 @@ class OSXBuilder(Builder):
 if __name__ == "__main__":
     folder = os.path.abspath(os.path.join(os.path.dirname(sys.argv[0]), "../.."))
     parser = argparse.ArgumentParser(description='The script builds OpenCV.framework for OSX.')
+    # TODO: When we can make breaking changes, we should make the out argument explicit and required like in build_xcframework.py.
     parser.add_argument('out', metavar='OUTDIR', help='folder to put built framework')
     parser.add_argument('--opencv', metavar='DIR', default=folder, help='folder with opencv repository (default is "../.." relative to script location)')
     parser.add_argument('--contrib', metavar='DIR', default=None, help='folder with opencv_contrib repository (default is "None" - build only main framework)')
-    parser.add_argument('--without', metavar='MODULE', default=[], action='append', help='OpenCV modules to exclude from the framework')
-    parser.add_argument('--disable', metavar='FEATURE', default=[], action='append', help='OpenCV features to disable (add WITH_*=OFF)')
+    parser.add_argument('--without', metavar='MODULE', default=[], action='append', help='OpenCV modules to exclude from the framework. To exclude multiple, specify this flag again, e.g. "--without video --without objc"')
+    parser.add_argument('--disable', metavar='FEATURE', default=[], action='append', help='OpenCV features to disable (add WITH_*=OFF). To disable multiple, specify this flag again, e.g. "--disable tbb --disable openmp"')
     parser.add_argument('--dynamic', default=False, action='store_true', help='build dynamic framework (default is "False" - builds static framework)')
     parser.add_argument('--enable_nonfree', default=False, dest='enablenonfree', action='store_true', help='enable non-free modules (disabled by default)')
     parser.add_argument('--macosx_deployment_target', default=os.environ.get('MACOSX_DEPLOYMENT_TARGET', MACOSX_DEPLOYMENT_TARGET), help='specify MACOSX_DEPLOYMENT_TARGET')
@@ -73,6 +77,7 @@ if __name__ == "__main__":
     parser.add_argument('--legacy_build', default=False, dest='legacy_build', action='store_true', help='Build legacy framework (default: False, equivalent to "--framework_name=opencv2 --without=objc")')
     parser.add_argument('--run_tests', default=False, dest='run_tests', action='store_true', help='Run tests')
     parser.add_argument('--build_docs', default=False, dest='build_docs', action='store_true', help='Build docs')
+    parser.add_argument('--disable-swift', default=False, dest='swiftdisabled', action='store_true', help='Disable building of Swift extensions')
 
     args, unknown_args = parser.parse_known_args()
     if unknown_args:
@@ -123,5 +128,5 @@ if __name__ == "__main__":
     if catalyst_archs:
         targets.append((catalyst_archs, "Catalyst")),
 
-    b = OSXBuilder(args.opencv, args.contrib, args.dynamic, True, args.without, args.disable, args.enablenonfree, targets, args.debug, args.debug_info, args.framework_name, args.run_tests, args.build_docs)
+    b = OSXBuilder(args.opencv, args.contrib, args.dynamic, True, args.without, args.disable, args.enablenonfree, targets, args.debug, args.debug_info, args.framework_name, args.run_tests, args.build_docs, args.swiftdisabled)
     b.build(args.out)

@@ -32,17 +32,17 @@ Adding --dynamic parameter will build {framework_name}.framework as App Store dy
 """
 
 from __future__ import print_function, unicode_literals
-import glob, os, os.path, shutil, string, sys, argparse, traceback, multiprocessing
+import glob, os, os.path, shutil, string, sys, argparse, traceback, multiprocessing, codecs, io
 from subprocess import check_call, check_output, CalledProcessError
 from distutils.dir_util import copy_tree
 
 sys.path.insert(0, os.path.abspath(os.path.abspath(os.path.dirname(__file__))+'/../apple'))
-from cv_build_utils import execute, print_error, get_xcode_major, get_xcode_setting
+from cv_build_utils import execute, print_error, get_xcode_major, get_xcode_setting, get_xcode_version, get_cmake_version
 
 IPHONEOS_DEPLOYMENT_TARGET='9.0'  # default, can be changed via command line options or environment variable
 
 class Builder:
-    def __init__(self, opencv, contrib, dynamic, bitcodedisabled, exclude, disable, enablenonfree, targets, debug, debug_info, framework_name, run_tests, build_docs):
+    def __init__(self, opencv, contrib, dynamic, bitcodedisabled, exclude, disable, enablenonfree, targets, debug, debug_info, framework_name, run_tests, build_docs, swiftdisabled):
         self.opencv = os.path.abspath(opencv)
         self.contrib = None
         if contrib:
@@ -63,6 +63,13 @@ class Builder:
         self.framework_name = framework_name
         self.run_tests = run_tests
         self.build_docs = build_docs
+        self.swiftdisabled = swiftdisabled
+
+    def checkCMakeVersion(self):
+        if get_xcode_version() >= (12, 2):
+            assert get_cmake_version() >= (3, 19), "CMake 3.19 or later is required when building with Xcode 12.2 or greater. Current version is {}".format(get_cmake_version())
+        else:
+            assert get_cmake_version() >= (3, 17), "CMake 3.17 or later is required. Current version is {}".format(get_cmake_version())
 
     def getBuildDir(self, parent, target):
 
@@ -73,6 +80,7 @@ class Builder:
         return os.path.abspath(res)
 
     def _build(self, outdir):
+        self.checkCMakeVersion()
         outdir = os.path.abspath(outdir)
         if not os.path.isdir(outdir):
             os.makedirs(outdir)
@@ -146,6 +154,22 @@ class Builder:
                 print("To build docs call:")
                 print(sys.argv[0].replace("build_framework", "build_docs") + " " + dirs[0] + "/modules/objc/framework_build")
             self.copy_samples(outdir)
+            if self.swiftdisabled:
+                swift_sources_dir = os.path.join(outdir, "SwiftSources")
+                if not os.path.exists(swift_sources_dir):
+                    os.makedirs(swift_sources_dir)
+                for root, dirs, files in os.walk(dirs[0]):
+                    for file in files:
+                        if file.endswith(".swift") and file.find("Test") == -1:
+                            with io.open(os.path.join(root, file), encoding="utf-8", errors="ignore") as file_in:
+                                body = file_in.read()
+                            if body.find("import Foundation") != -1:
+                                insert_pos = body.find("import Foundation") + len("import Foundation") + 1
+                                body = body[:insert_pos] + "import " + self.framework_name + "\n" + body[insert_pos:]
+                            else:
+                                body = "import " + self.framework_name + "\n\n" + body
+                            with codecs.open(os.path.join(swift_sources_dir, file), "w", "utf-8") as file_out:
+                                file_out.write(body)
 
     def build(self, outdir):
         try:
@@ -290,8 +314,8 @@ class Builder:
         execute(["cmake", "-DBUILD_TYPE=%s" % self.getConfiguration(), "-P", "cmake_install.cmake"], cwd = builddir)
         if self.build_objc_wrapper:
             cmakecmd = self.makeCMakeCmd(arch, target, builddir + "/modules/objc_bindings_generator/{}/gen".format(self.getObjcTarget(target)), cmakeargs)
-            # cmakecmd.append("-DCMAKE_Swift_FLAGS=" + "-target x86_64-apple-ios13.0-macabi")
-            # cmakecmd.append("-DCMAKE_EXE_LINKER_FLAGS=" + "-target x86_64-apple-ios13.0-macabi")
+            if self.swiftdisabled:
+                cmakecmd.append("-DSWIFT_DISABLED=1")
             cmakecmd.append("-DBUILD_ROOT=%s" % builddir)
             cmakecmd.append("-DCMAKE_INSTALL_NAME_TOOL=install_name_tool")
             cmakecmd.append("--no-warn-unused-cli")
@@ -483,11 +507,12 @@ class iOSBuilder(Builder):
 if __name__ == "__main__":
     folder = os.path.abspath(os.path.join(os.path.dirname(sys.argv[0]), "../.."))
     parser = argparse.ArgumentParser(description='The script builds OpenCV.framework for iOS.')
+    # TODO: When we can make breaking changes, we should make the out argument explicit and required like in build_xcframework.py.
     parser.add_argument('out', metavar='OUTDIR', help='folder to put built framework')
     parser.add_argument('--opencv', metavar='DIR', default=folder, help='folder with opencv repository (default is "../.." relative to script location)')
     parser.add_argument('--contrib', metavar='DIR', default=None, help='folder with opencv_contrib repository (default is "None" - build only main framework)')
-    parser.add_argument('--without', metavar='MODULE', default=[], action='append', help='OpenCV modules to exclude from the framework')
-    parser.add_argument('--disable', metavar='FEATURE', default=[], action='append', help='OpenCV features to disable (add WITH_*=OFF)')
+    parser.add_argument('--without', metavar='MODULE', default=[], action='append', help='OpenCV modules to exclude from the framework. To exclude multiple, specify this flag again, e.g. "--without video --without objc"')
+    parser.add_argument('--disable', metavar='FEATURE', default=[], action='append', help='OpenCV features to disable (add WITH_*=OFF). To disable multiple, specify this flag again, e.g. "--disable tbb --disable openmp"')
     parser.add_argument('--dynamic', default=False, action='store_true', help='build dynamic framework (default is "False" - builds static framework)')
     parser.add_argument('--disable-bitcode', default=False, dest='bitcodedisabled', action='store_true', help='disable bitcode (enabled by default)')
     parser.add_argument('--iphoneos_deployment_target', default=os.environ.get('IPHONEOS_DEPLOYMENT_TARGET', IPHONEOS_DEPLOYMENT_TARGET), help='specify IPHONEOS_DEPLOYMENT_TARGET')
@@ -501,6 +526,7 @@ if __name__ == "__main__":
     parser.add_argument('--legacy_build', default=False, dest='legacy_build', action='store_true', help='Build legacy opencv2 framework (default: False, equivalent to "--framework_name=opencv2 --without=objc")')
     parser.add_argument('--run_tests', default=False, dest='run_tests', action='store_true', help='Run tests')
     parser.add_argument('--build_docs', default=False, dest='build_docs', action='store_true', help='Build docs')
+    parser.add_argument('--disable-swift', default=False, dest='swiftdisabled', action='store_true', help='Disable building of Swift extensions')
 
     args, unknown_args = parser.parse_known_args()
     if unknown_args:
@@ -554,6 +580,6 @@ if __name__ == "__main__":
         if iphonesimulator_archs:
             targets.append((iphonesimulator_archs, "iPhoneSimulator"))
 
-    b = iOSBuilder(args.opencv, args.contrib, args.dynamic, args.bitcodedisabled, args.without, args.disable, args.enablenonfree, targets, args.debug, args.debug_info, args.framework_name, args.run_tests, args.build_docs)
+    b = iOSBuilder(args.opencv, args.contrib, args.dynamic, args.bitcodedisabled, args.without, args.disable, args.enablenonfree, targets, args.debug, args.debug_info, args.framework_name, args.run_tests, args.build_docs, args.swiftdisabled)
 
     b.build(args.out)

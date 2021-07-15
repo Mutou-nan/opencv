@@ -20,7 +20,7 @@ namespace gimpl
 
 // FIXME: GAPI_EXPORTS is here only due to tests and Windows linker issues
 // FIXME: It seems it clearly duplicates the GStreamingCompiled and
-// GStreamingExecutable APIs so is highly redundant now.
+// GStreamingIntrinExecutable APIs so is highly redundant now.
 // Same applies to GCompiled/GCompiled::Priv/GExecutor.
 class GAPI_EXPORTS GStreamingCompiled::Priv
 {
@@ -46,6 +46,7 @@ public:
     void start();
     bool pull(cv::GRunArgsP &&outs);
     bool pull(cv::GOptRunArgsP &&outs);
+    std::tuple<bool, cv::util::variant<cv::GRunArgs, cv::GOptRunArgs>> pull();
     bool try_pull(cv::GRunArgsP &&outs);
     void stop();
 
